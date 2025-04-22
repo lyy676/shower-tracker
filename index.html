@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>洗澡记录系统</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      max-width: 700px;
+      margin: auto;
+      padding: 20px;
+      background: #f0f8ff;
+      color: #333;
+    }
+    h2 {
+      text-align: center;
+      color: #0077b6;
+    }
+    label, select, input, button {
+      margin-top: 10px;
+      display: block;
+      width: 100%;
+    }
+    button {
+      padding: 10px;
+      background-color: #0077b6;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    table {
+      width: 100%;
+      margin-top: 20px;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 8px;
+      border: 1px solid #ccc;
+      text-align: center;
+    }
+    canvas {
+      margin-top: 30px;
+    }
+    #stats {
+      margin-top: 20px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <h2>🛁 情侣洗澡记录系统</h2>
+
+  <label>谁洗澡？</label>
+  <select id="name">
+    <option>SGC</option>
+    <option>LYY</option>
+  </select>
+
+  <label>开始时间</label>
+  <input type="datetime-local" id="start">
+
+  <label>结束时间</label>
+  <input type="datetime-local" id="end">
+
+  <button onclick="submitRecord()">提交记录</button>
+  <button onclick="startNewWeek()">开始新的一周</button>
+
+  <div id="stats"></div>
+
+  <table id="recordTable">
+    <thead>
+      <tr><th>谁</th><th>开始</th><th>结束</th><th>分钟</th><th>删除</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <canvas id="chart"></canvas>
+
+  <script>
+    const token = "patVagIrysQVCoLcr.48d379b8c6d8bec83b5e63837e11c09c87939386378b93fae415e8f95d7ff4f8";
+    const baseId = "app6RyLWJEPEYBEjz";
+    const tableName = "Table%201";
+    const apiURL = `https://api.airtable.com/v0/${baseId}/${tableName}`;
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    };
+
+    function getWeekStr(date) {
+      const year = date.getFullYear();
+      const jan1 = new Date(year, 0, 1);
+      const dayOfYear = Math.floor((date - jan1 + 86400000) / 86400000);
+      const week = Math.ceil((dayOfYear + jan1.getDay()) / 7);
+      return `${year}-W${week}`;
+    }
+
+    async function submitRecord() {
+      const name = document.getElementById("name").value;
+      const start = document.getElementById("start").value;
+      const end = document.getElementById("end").value;
+      if (!start || !end) return alert("请填写开始和结束时间");
+
+      const record = {
+        fields: {
+          "Name": name,
+          "Start Time": start,
+          "End Time": end,
+          "Week Number": getWeekStr(new Date())
+        }
+      };
+
+      await fetch(apiURL, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(record)
+      });
+
+      loadRecords();
+    }
+
+    async function deleteRecord(id) {
+      await fetch(`${apiURL}/${id}`, { method: "DELETE", headers });
+      loadRecords();
+    }
+
+    function formatLocal(str) {
+  const d = new Date(str);
+  // 手动加 8 小时
+  d.setHours(d.getHours() - 8);
+  return d.toLocaleString("zh-CN", { hour12: false });
+}
+
+
+    async function loadRecords() {
+      const res = await fetch(`${apiURL}?sort[0][field]=Start%20Time&sort[0][direction]=asc`, { headers });
+      const data = await res.json();
+      const tbody = document.querySelector("#recordTable tbody");
+      tbody.innerHTML = "";
+
+      const week = getWeekStr(new Date());
+      const records = data.records.filter(r => r.fields["Week Number"] === week);
+
+      let total = { SGC: 0, LYY: 0 };
+      let durations = { SGC: [], LYY: [] };
+      let daily = { SGC: {}, LYY: {} };
+
+      for (let r of records) {
+        const f = r.fields;
+        const dur = f["Duration (min)"] || 0;
+        const who = f["Name"];
+        total[who] += dur;
+        durations[who].push(dur);
+
+        const dateKey = f["Start Time"].slice(0, 10);
+        daily[who][dateKey] = (daily[who][dateKey] || 0) + dur;
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${who}</td>
+          <td>${formatLocal(f["Start Time"])}</td>
+          <td>${formatLocal(f["End Time"])}</td>
+          <td>${dur}</td>
+          <td><button onclick="deleteRecord('${r.id}')">删除</button></td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      const statDiv = document.getElementById("stats");
+      statDiv.innerHTML = `
+        🧼 <b>SGC</b>：总 ${total.SGC} 分钟，平均 ${avg(durations.SGC)} 分钟，变化 ${diff(durations.SGC)} 分钟<br>
+        🧼 <b>LYY</b>：总 ${total.LYY} 分钟，平均 ${avg(durations.LYY)} 分钟，变化 ${diff(durations.LYY)} 分钟
+      `;
+
+      drawChart(daily);
+    }
+
+    function avg(arr) {
+      return arr.length ? (arr.reduce((a, b) => a + b) / arr.length).toFixed(1) : 0;
+    }
+
+    function diff(arr) {
+      return arr.length > 1 ? (arr[arr.length - 1] - arr[arr.length - 2]) : 0;
+    }
+
+    function drawChart(daily) {
+      const labels = [...new Set([...Object.keys(daily.SGC), ...Object.keys(daily.LYY)])].sort();
+      const dataSGC = labels.map(d => daily.SGC[d] || 0);
+      const dataLYY = labels.map(d => daily.LYY[d] || 0);
+
+      const ctx = document.getElementById("chart").getContext("2d");
+      if (window.chartObj) window.chartObj.destroy();
+      window.chartObj = new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels,
+          datasets: [
+            { label: "SGC", data: dataSGC, backgroundColor: "rgba(75,192,192,0.6)" },
+            { label: "LYY", data: dataLYY, backgroundColor: "rgba(255,99,132,0.6)" }
+          ]
+        }
+      });
+    }
+
+    async function startNewWeek() {
+      const res = await fetch(apiURL, { headers });
+      const data = await res.json();
+      const weekNow = getWeekStr(new Date());
+
+      for (let r of data.records) {
+        await fetch(`${apiURL}/${r.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({
+            fields: { "Week Number": weekNow }
+          })
+        });
+      }
+
+      loadRecords();
+    }
+
+    loadRecords();
+  </script>
+</body>
+</html>
